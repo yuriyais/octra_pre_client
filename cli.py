@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 import nacl.signing
 
-c = {'r': '\033[0m', 'b': '\033[94m', 'c': '\033[96m', 'g': '\033[92m', 'y': '\033[93m', 'R': '\033[91m', 'B': '\033[1m', 'bg': '\033[44m', 'bgr': '\033[41m', 'bgg': '\033[42m', 'w': '\033[97m'}
+c = {'r': '\033[0m', 'b': '\033[34m', 'c': '\033[36m', 'g': '\033[32m', 'y': '\033[33m', 'R': '\033[31m', 'B': '\033[1m', 'bg': '\033[44m', 'bgr': '\033[41m', 'bgg': '\033[42m', 'w': '\033[37m'}
 
 priv, addr, rpc = None, None, None
 sk, pub = None, None
@@ -187,6 +187,13 @@ async def gh():
                 ii = p.get('to') == addr
                 ar = p.get('amount_raw', p.get('amount', '0'))
                 a = float(ar) if '.' in str(ar) else int(ar) / μ
+                msg = None
+                if 'data' in j2:
+                    try:
+                        data = json.loads(j2['data'])
+                        msg = data.get('message')
+                    except:
+                        pass
                 nh.append({
                     'time': datetime.fromtimestamp(p.get('timestamp', 0)),
                     'hash': tx_hash,
@@ -195,7 +202,8 @@ async def gh():
                     'type': 'in' if ii else 'out',
                     'ok': True,
                     'nonce': p.get('nonce', 0),
-                    'epoch': ref.get('epoch', 0)
+                    'epoch': ref.get('epoch', 0),
+                    'msg': msg
                 })
         
         oh = datetime.now() - timedelta(hours=1)
@@ -205,7 +213,7 @@ async def gh():
         h.clear()
         lh = now
 
-def mk(to, a, n):
+def mk(to, a, n, msg=None):
     tx = {
         "from": addr,
         "to_": to,
@@ -214,7 +222,9 @@ def mk(to, a, n):
         "ou": "1" if a < 1000 else "3",
         "timestamp": time.time() + random.random() * 0.01
     }
-    bl = json.dumps(tx, separators=(",", ":"))
+    if msg:
+        tx["message"] = msg
+    bl = json.dumps({k: v for k, v in tx.items() if k != "message"}, separators=(",", ":"))
     sig = base64.b64encode(sk.sign(bl.encode()).signature).decode()
     tx.update(signature=sig, public_key=pub)
     return tx, hashlib.sha256(bl.encode()).hexdigest()
@@ -256,7 +266,6 @@ async def expl(x, y, w, hb):
         at(x + 2, y + 11, "─" * (w - 4), c['w'])
         seen_hashes = set()
         display_count = 0
-        # Sort by time descending (newest first)
         sorted_h = sorted(h, key=lambda x: x['time'], reverse=True)
         for tx in sorted_h:
             if tx['hash'] in seen_hashes:
@@ -265,13 +274,13 @@ async def expl(x, y, w, hb):
             if display_count >= min(len(h), hb - 15):
                 break
             is_pending = not tx.get('epoch')
-            # Highlight pending transactions
             time_color = c['y'] if is_pending else c['w']
             at(x + 2, y + 12 + display_count, tx['time'].strftime('%H:%M:%S'), time_color)
             at(x + 11, y + 12 + display_count, " in" if tx['type'] == 'in' else "out", c['g'] if tx['type'] == 'in' else c['R'])
             at(x + 16, y + 12 + display_count, f"{float(tx['amt']):>10.6f}", c['w'])
             at(x + 28, y + 12 + display_count, str(tx.get('to', '---')), c['y'])
-            # Highlight pending status
+            if tx.get('msg'):
+                at(x + 77, y + 12 + display_count, "msg", c['c'])
             status_text = "pen" if is_pending else f"e{tx.get('epoch', 0)}"
             status_color = c['y'] + c['B'] if is_pending else c['c']
             at(x + w - 6, y + 12 + display_count, status_text, status_color)
@@ -291,13 +300,12 @@ async def scr():
     cr = sz()
     cls()
     fill()
-    t = f" octra pre-client v0.0.12 (dev) │ {datetime.now().strftime('%H:%M:%S')} "
+    t = f" octra pre-client v0.0.13 (dev) │ {datetime.now().strftime('%H:%M:%S')} "
     at((cr[0] - len(t)) // 2, 1, t, c['B'] + c['w'])
     
     sidebar_w = 28
     menu(2, 3, sidebar_w, 17)
     
-    # info box
     info_y = 21
     box(2, info_y, sidebar_w, 9)
     at(4, info_y + 2, "testnet environment.", c['y'])
@@ -319,7 +327,7 @@ async def tx():
     cr = sz()
     cls()
     fill()
-    w, hb = 85, 22
+    w, hb = 85, 26
     x = (cr[0] - w) // 2
     y = (cr[1] - hb) // 2
     box(x, y, w, hb, "send transaction")
@@ -345,30 +353,42 @@ async def tx():
         await ainp(x + 2, y + 16)
         return
     a = float(a)
+    at(x + 2, y + 10, f"amount: {a:.6f} oct", c['g'])
+    at(x + 2, y + 12, "message (optional, max 1024): (or enter to skip)", c['y'])
+    at(x + 2, y + 13, "─" * (w - 4), c['w'])
+    msg = await ainp(x + 2, y + 14)
+    if not msg:
+        msg = None
+    elif len(msg) > 1024:
+        msg = msg[:1024]
+        at(x + 2, y + 15, "message truncated to 1024 chars", c['y'])
+    
     global lu
     lu = 0
     n, b = await st()
     if n is None:
-        at(x + 2, y + 14, "failed to get nonce!", c['bgr'] + c['w'])
-        at(x + 2, y + 15, "press enter to go back...", c['y'])
-        await ainp(x + 2, y + 16)
+        at(x + 2, y + 17, "failed to get nonce!", c['bgr'] + c['w'])
+        at(x + 2, y + 18, "press enter to go back...", c['y'])
+        await ainp(x + 2, y + 19)
         return
     if not b or b < a:
-        at(x + 2, y + 14, f"insufficient balance ({b:.6f} < {a})", c['bgr'] + c['w'])
-        at(x + 2, y + 15, "press enter to go back...", c['y'])
-        await ainp(x + 2, y + 16)
+        at(x + 2, y + 17, f"insufficient balance ({b:.6f} < {a})", c['bgr'] + c['w'])
+        at(x + 2, y + 18, "press enter to go back...", c['y'])
+        await ainp(x + 2, y + 19)
         return
-    at(x + 2, y + 11, "─" * (w - 4), c['w'])
-    at(x + 2, y + 12, f"send {a:.6f} oct", c['B'] + c['g'])
-    at(x + 2, y + 13, f"to:  {to}", c['g'])
-    at(x + 2, y + 14, f"fee: {'0.001' if a < 1000 else '0.003'} oct (nonce: {n + 1})", c['y'])
-    at(x + 2, y + 15, "[y]es / [n]o: ", c['B'] + c['y'])
-    if (await ainp(x + 16, y + 15)).strip().lower() != 'y':
+    at(x + 2, y + 16, "─" * (w - 4), c['w'])
+    at(x + 2, y + 17, f"send {a:.6f} oct", c['B'] + c['g'])
+    at(x + 2, y + 18, f"to:  {to}", c['g'])
+    if msg:
+        at(x + 2, y + 19, f"msg: {msg[:50]}{'...' if len(msg) > 50 else ''}", c['c'])
+    at(x + 2, y + 20, f"fee: {'0.001' if a < 1000 else '0.003'} oct (nonce: {n + 1})", c['y'])
+    at(x + 2, y + 21, "[y]es / [n]o: ", c['B'] + c['y'])
+    if (await ainp(x + 16, y + 21)).strip().lower() != 'y':
         return
     
-    spin_task = asyncio.create_task(spin_animation(x + 2, y + 16, "sending transaction"))
+    spin_task = asyncio.create_task(spin_animation(x + 2, y + 22, "sending transaction"))
     
-    t, _ = mk(to, a, n + 1)
+    t, _ = mk(to, a, n + 1, msg)
     ok, hs, dt, r = await snd(t)
     
     spin_task.cancel()
@@ -378,26 +398,27 @@ async def tx():
         pass
     
     if ok:
-        for i in range(16, 21):
+        for i in range(17, 25):
             at(x + 2, y + i, " " * (w - 4), c['bg'])
-        at(x + 2, y + 16, f"✓ transaction accepted!", c['bgg'] + c['w'])
-        at(x + 2, y + 17, f"hash: {hs[:64]}...", c['g'])
-        at(x + 2, y + 18, f"      {hs[64:]}", c['g'])
-        at(x + 2, y + 19, f"time: {dt:.2f}s", c['w'])
+        at(x + 2, y + 20, f"✓ transaction accepted!", c['bgg'] + c['w'])
+        at(x + 2, y + 21, f"hash: {hs[:64]}...", c['g'])
+        at(x + 2, y + 22, f"      {hs[64:]}", c['g'])
+        at(x + 2, y + 23, f"time: {dt:.2f}s", c['w'])
         if r and 'pool_info' in r:
-            at(x + 2, y + 20, f"pool: {r['pool_info'].get('total_pool_size', 0)} txs pending", c['y'])
+            at(x + 2, y + 24, f"pool: {r['pool_info'].get('total_pool_size', 0)} txs pending", c['y'])
         h.append({
             'time': datetime.now(),
             'hash': hs,
             'amt': a,
             'to': to,
             'type': 'out',
-            'ok': True
+            'ok': True,
+            'msg': msg
         })
         lu = 0
     else:
-        at(x + 2, y + 16, f"✗ transaction failed!", c['bgr'] + c['w'])
-        at(x + 2, y + 17, f"error: {str(hs)[:w - 10]}", c['R'])
+        at(x + 2, y + 20, f"✗ transaction failed!", c['bgr'] + c['w'])
+        at(x + 2, y + 21, f"error: {str(hs)[:w - 10]}", c['R'])
     await awaitkey()
 
 async def multi():
